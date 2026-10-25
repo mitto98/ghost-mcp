@@ -1,0 +1,30 @@
+# Drop-in "mcp" service for an existing Ghost + Traefik stack.
+# Merge it into your compose file; adjust the network, entrypoint and cert resolver names.
+services:
+  mcp:
+    build: ./ghost-mcp
+    container_name: ghost-mcp
+    restart: unless-stopped
+    # Nothing is published on the host: Traefik reaches the container over the Docker network.
+    expose:
+      - "3000"
+    environment:
+      GHOST_URL: ${GHOST_URL}
+      GHOST_ADMIN_KEY: ${GHOST_ADMIN_KEY}
+      MCP_SECRET: ${MCP_SECRET}
+      ENABLE_DELETE: ${ENABLE_DELETE:-false}
+    networks:
+      - web # must be the network Traefik and Ghost are on
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=web
+      # No basicauth middleware: the Claude connector cannot send Basic auth.
+      # Access is protected by MCP_SECRET in the URL path.
+      - traefik.http.routers.mcp.rule=(Host(`ilfondo.org`) || Host(`www.ilfondo.org`)) && PathPrefix(`/mcp`)
+      - traefik.http.routers.mcp.entrypoints=websecure
+      - traefik.http.routers.mcp.tls.certresolver=letsencrypt
+      - traefik.http.services.mcp.loadbalancer.server.port=3000
+
+networks:
+  web:
+    external: true
