@@ -28,7 +28,8 @@ MCP server for **any Ghost instance**, built on the official `@modelcontextproto
 | `READ_ONLY` | no | `false` | Registers read tools only, overriding the two flags above for writes. |
 | `PORT` / `HOST` | no | `3000` / `0.0.0.0` | |
 | `GHOST_TIMEOUT_MS` | no | `30000` | Per Ghost request. |
-| `MAX_UPLOAD_BYTES` | no | `10485760` | Limit for `upload_ghost_image`. |
+| `MAX_UPLOAD_BYTES` | no | `10485760` | Limit for image uploads. |
+| `ALLOW_PRIVATE_IMAGE_URLS` | no | `false` | Allow image downloads from private/loopback addresses. Leave off unless your image host is internal. |
 
 The server refuses to start (exit 1) if anything required is missing or malformed, and the error
 never prints secret values. On boot it logs whether Ghost is reachable and whether the Admin key is
@@ -51,13 +52,22 @@ as a password.
 | `get_ghost_site` | Title, description, URL, Ghost version, and what this server may do |
 | `list_ghost_posts` / `list_ghost_pages` | `limit`, `page`, `status`, NQL `filter`, `order`, `include_content` |
 | `get_ghost_post` / `get_ghost_page` | By `id` or `slug`; includes HTML |
-| `create_ghost_post` / `create_ghost_page` | `html` (converted to Lexical via `?source=html`), tags, authors, status, scheduling, SEO fields. Defaults to draft |
+| `create_ghost_post` / `create_ghost_page` | `html` (converted to Lexical via `?source=html`), tags, authors, status, scheduling, SEO fields, `feature_image_file`. Defaults to draft |
 | `update_ghost_post` / `update_ghost_page` | Partial update; `updated_at` is fetched automatically (or pass one for optimistic locking) |
 | `list_ghost_tags`, `get_ghost_tag`, `create_ghost_tag`, `update_ghost_tag` | |
 | `list_ghost_tiers`, `list_ghost_newsletters`, `list_ghost_users` | Read-only |
-| `upload_ghost_image` | From a public URL (private/loopback addresses refused) or base64 |
+| `upload_ghost_image` | From an attached/generated ChatGPT image (`file`), a public URL (private/loopback addresses refused) or base64 |
 | `delete_ghost_post/page/tag` | Only with `ENABLE_DELETE=true` |
 | `list/get/create/update_ghost_member` | Only with `ENABLE_MEMBERS=true` |
+
+### Images from ChatGPT
+
+ChatGPT cannot put a generated image's bytes into a normal tool argument. The image tools therefore declare
+`_meta["openai/fileParams"]`, so ChatGPT sends attached or generated images as `{download_url, file_id}`;
+the server downloads that temporary URL (never logged or echoed back), checks it really is an image
+(by its bytes, since these hosts often answer `application/octet-stream`), and uploads it to Ghost.
+`create_ghost_post` / `update_ghost_post` (and the page equivalents) take `feature_image_file` directly,
+so a draft with its cover image is one call. Other clients can keep using `feature_image` / `url` / `base64`.
 
 Deliberately **not** supported: sending a post as a newsletter email. Publish from here, send from Ghost Admin.
 Setting `html` on an existing post replaces its whole body (Ghost re-creates the Lexical content).
