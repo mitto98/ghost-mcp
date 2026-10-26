@@ -104,7 +104,47 @@ function first(res: Json | null, key: string): Json {
   return item;
 }
 
+const chatgptFile = z
+  .object({
+    download_url: z.string().url(),
+    file_id: z.string().optional(),
+    mime_type: z.string().optional(),
+    file_name: z.string().optional(),
+  })
+  .describe('A file attached in ChatGPT (including images it generated); ChatGPT fills this in automatically.');
+type ChatgptFile = z.infer<typeof chatgptFile>;
+
+/** Tells ChatGPT these parameters take attached files, which it then sends as {download_url, file_id}. */
+const fileParams = (...names: string[]) => ({ _meta: { 'openai/fileParams': names } });
+
 export function registerTools(server: McpServer, ghost: GhostClient, cfg: Config): void {
+  /** Uploads an image to Ghost from a ChatGPT file, a URL or base64 data, and returns its Ghost URL. */
+  async function uploadImage(src: { file?: ChatgptFile; url?: string; base64?: string; filename?: string; purpose?: string }): Promise<string> {
+    let data: Buffer;
+    let filename: string;
+    let contentType: string | undefined;
+    const fetchOpts = { maxBytes: cfg.maxUploadBytes, timeoutMs: cfg.timeoutMs, allowPrivate: cfg.allowPrivateImageUrls };
+    if (src.file) {
+      ({ data, filename, contentType } = await fetchImage(src.file.download_url, { ...fetchOpts, mimeType: src.file.mime_type, fileName: src.file.file_name }));
+    } else if (src.url) {
+      ({ data, filename, contentType } = await fetchImage(src.url, fetchOpts));
+    } else if (src.base64) {
+      if (!src.filename) throw new Error('filename is required with base64');
+      data = Buffer.from(src.base64, 'base64');
+      if (data.length > cfg.maxUploadBytes) throw new Error(`Image is larger than the ${cfg.maxUploadBytes} byte limit`);
+      filename = src.filename;
+      contentType = mimeFromFilename(filename);
+    } else {
+      throw new Error('Provide file, url or base64');
+    }
+    if (!data.length) throw new Error('Image is empty');
+    const form = new FormData();
+    form.append('file', new Blob([new Uint8Array(data)], { type: contentType ?? 'application/octet-stream' }), filename);
+    form.append('purpose', src.purpose ?? 'image');
+    const res = await ghost.request('POST', '/images/upload/', { form });
+    return first(res, 'images').url;
+  }
+
   // ---- site ---------------------------------------------------------------
 
   server.registerTool(
@@ -137,6 +177,7 @@ export function registerTools(server: McpServer, ghost: GhostClient, cfg: Config
     slug: z.string().optional(),
     custom_excerpt: z.string().max(300).optional(),
     feature_image: z.string().url().optional().describe('URL of the feature image (see upload_ghost_image)'),
+    feature_image_file: chatgptFile.optional().describe('Feature image attached in ChatGPT (e.g. a generated image); uploaded to Ghost and used as feature_image'),
     feature_image_alt: z.string().max(125).optional(),
     feature_image_caption: z.string().optional(),
     featured: z.boolean().optional(),
@@ -225,8 +266,10 @@ export function registerTools(server: McpServer, ghost: GhostClient, cfg: Config
         description: `Creates a ${kind}. Defaults to a draft. Does not send any newsletter email.`,
         inputSchema: createShape,
         annotations: WRITE,
+        ...fileParams('feature_image_file'),
       },
-      run<z.infer<z.ZodObject<typeof createShape>>>(async (a) => {
+      run<z.infer<z.ZodObject<typeof createShape>>>(async ({ feature_image_file, ...a }) => {
+        if (feature_image_file) (a as Json).feature_image = await uploadImage({ file: feature_image_file });
         const body = buildBody(a);
         const res = await ghost.post(base, { [plural]: [body] }, { source: body.html !== undefined ? 'html' : undefined });
         return summarizeContent(first(res, plural));
@@ -249,9 +292,11 @@ export function registerTools(server: McpServer, ghost: GhostClient, cfg: Config
         description: `Updates the given fields of a ${kind}; omitted fields are unchanged. Setting html replaces the whole body.`,
         inputSchema: updateShape,
         annotations: WRITE,
+        ...fileParams('feature_image_file'),
       },
-      run<z.infer<z.ZodObject<typeof updateShape>>>(async (a) => {
+      run<z.infer<z.ZodObject<typeof updateShape>>>(async ({ feature_image_file, ...a }) => {
         const { id, updated_at, ...fields } = a;
+        if (feature_image_file) (fields as Json).feature_image = await uploadImage({ file: feature_image_file });
         const body = buildBody(fields);
         if (!Object.keys(body).length) throw new Error('Nothing to update: provide at least one field');
         const path = `${base}${encodeURIComponent(id)}/`;
@@ -456,8 +501,9 @@ export function registerTools(server: McpServer, ghost: GhostClient, cfg: Config
 
   if (!cfg.readOnly) {
     const uploadShape = {
+      file: chatgptFile.optional().describe('Image attached in ChatGPT, including images ChatGPT generated'),
       url: z.string().url().optional().describe('Public http(s) image URL to download and upload to Ghost'),
-      base64: z.string().optional().describe('Base64-encoded image bytes (alternative to url)'),
+      base64: z.string().optional().describe('Base64-encoded image bytes (small images only)'),
       filename: z.string().optional().describe('File name with extension; required with base64'),
       purpose: z.enum(['image', 'profile_image', 'icon']).default('image'),
     };
@@ -465,32 +511,13 @@ export function registerTools(server: McpServer, ghost: GhostClient, cfg: Config
       'upload_ghost_image',
       {
         title: 'Upload an image to Ghost',
-        description: 'Uploads an image to the Ghost media library and returns its URL, for use as feature_image or inside html.',
+        description:
+          'Uploads an image to the Ghost media library and returns its URL, for use as feature_image or inside html. Accepts an attached/generated ChatGPT image (file), a public URL, or base64.',
         inputSchema: uploadShape,
         annotations: WRITE,
+        ...fileParams('file'),
       },
-      run<z.infer<z.ZodObject<typeof uploadShape>>>(async (a) => {
-        let data: Buffer;
-        let filename: string;
-        let contentType: string | undefined;
-        if (a.url) {
-          ({ data, filename, contentType } = await fetchImage(a.url, cfg.maxUploadBytes, cfg.timeoutMs));
-        } else if (a.base64) {
-          if (!a.filename) throw new Error('filename is required with base64');
-          data = Buffer.from(a.base64, 'base64');
-          if (data.length > cfg.maxUploadBytes) throw new Error(`Image is larger than the ${cfg.maxUploadBytes} byte limit`);
-          filename = a.filename;
-          contentType = mimeFromFilename(filename);
-        } else {
-          throw new Error('Provide url or base64');
-        }
-        if (!data.length) throw new Error('Image is empty');
-        const form = new FormData();
-        form.append('file', new Blob([new Uint8Array(data)], { type: contentType ?? 'application/octet-stream' }), filename);
-        form.append('purpose', a.purpose);
-        const res = await ghost.request('POST', '/images/upload/', { form });
-        return { url: first(res, 'images').url };
-      }),
+      run<z.infer<z.ZodObject<typeof uploadShape>>>(async (a) => ({ url: await uploadImage(a) })),
     );
   }
 }

@@ -245,3 +245,67 @@ describe('server (flags)', () => {
     srv.close(); redirector.close();
   });
 });
+
+describe('ChatGPT file params', () => {
+  // Smallest valid PNG header + padding; served as octet-stream like ChatGPT's download URLs.
+  const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(32)]);
+  let ghost, images, mcp, port;
+  before(async () => {
+    ghost = await startMockGhost();
+    images = http.createServer((req, res) => { res.writeHead(200, { 'Content-Type': 'application/octet-stream' }); res.end(png); });
+    const ip = await listen(images);
+    mcp = createHttpServer(loadConfig(baseEnv(ghost.port, { ALLOW_PRIVATE_IMAGE_URLS: 'true' })));
+    port = await listen(mcp);
+    images.fileUrl = `http://127.0.0.1:${ip}/download/abc`;
+  });
+  after(() => { mcp.close(); images.close(); ghost.server.close(); });
+
+  it('advertises openai/fileParams on the image tools', async () => {
+    const tools = (await (await rpc(port, `/mcp/${MCP_SECRET}`, 'tools/list', {})).json()).result.tools;
+    const by = Object.fromEntries(tools.map((t) => [t.name, t]));
+    assert.deepEqual(by.upload_ghost_image._meta['openai/fileParams'], ['file']);
+    assert.deepEqual(by.create_ghost_post._meta['openai/fileParams'], ['feature_image_file']);
+    assert.deepEqual(by.update_ghost_page._meta['openai/fileParams'], ['feature_image_file']);
+    assert.ok(by.upload_ghost_image.inputSchema.properties.file.properties.download_url);
+  });
+
+  it('uploads an attached image even when the host says octet-stream', async () => {
+    const r = await callTool(port, 'upload_ghost_image', { file: { download_url: images.fileUrl, file_id: 'file_1', file_name: 'cover.png' } });
+    assert.ok(!r.isError, r.content[0].text);
+    assert.equal(JSON.parse(r.content[0].text).url, 'https://blog.test/content/images/a.png');
+    assert.match(ghost.calls.at(-1).ct, /multipart\/form-data/);
+  });
+
+  it('create_ghost_post uploads feature_image_file and sets feature_image', async () => {
+    const r = await callTool(port, 'create_ghost_post', {
+      title: 'Recensione', html: '<p>x</p>', status: 'draft',
+      feature_image_file: { download_url: images.fileUrl, file_id: 'file_2' },
+      meta_title: 'SEO', meta_description: 'desc',
+    });
+    assert.ok(!r.isError, r.content[0].text);
+    const c = ghost.calls.at(-1);
+    assert.equal(c.path, '/posts/');
+    assert.equal(c.body.posts[0].feature_image, 'https://blog.test/content/images/a.png');
+    assert.equal(c.body.posts[0].feature_image_file, undefined);
+    assert.equal(c.body.posts[0].meta_title, 'SEO');
+  });
+
+  it('rejects non-image downloads', async () => {
+    const text = http.createServer((req, res) => { res.writeHead(200, { 'Content-Type': 'text/html' }); res.end('<html>nope</html>'); });
+    const tp = await listen(text);
+    const r = await callTool(port, 'upload_ghost_image', { file: { download_url: `http://127.0.0.1:${tp}/x`, file_id: 'f' } });
+    assert.equal(r.isError, true);
+    assert.match(r.content[0].text, /did not return an image/);
+    text.close();
+  });
+
+  it('private download URLs stay blocked by default', async () => {
+    const strict = createHttpServer(loadConfig(baseEnv(ghost.port)));
+    const sp = await listen(strict);
+    const r = await callTool(sp, 'upload_ghost_image', { file: { download_url: images.fileUrl, file_id: 'f' } });
+    assert.equal(r.isError, true);
+    assert.match(r.content[0].text, /private/);
+    strict.close();
+  });
+});
+

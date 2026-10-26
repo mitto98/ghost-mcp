@@ -15,6 +15,8 @@ export interface Config {
   enableMembers: boolean;
   timeoutMs: number;
   maxUploadBytes: number;
+  /** Allow image downloads from private/loopback addresses (off by default, SSRF guard). */
+  allowPrivateImageUrls: boolean;
 }
 
 export class ConfigError extends Error {}
@@ -117,5 +119,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     enableMembers: bool(env.ENABLE_MEMBERS, false),
     timeoutMs,
     maxUploadBytes,
+    allowPrivateImageUrls: bool(env.ALLOW_PRIVATE_IMAGE_URLS, false),
   };
 }
