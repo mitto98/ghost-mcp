@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHmac, randomBytes } from 'node:crypto';
+import { readdirSync } from 'node:fs';
 import http from 'node:http';
 import { after, before, describe, it } from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -306,6 +307,23 @@ describe('ChatGPT file params', () => {
     assert.equal(r.isError, true);
     assert.match(r.content[0].text, /private/);
     strict.close();
+  });
+});
+
+describe('tools folder layout', () => {
+  it('has exactly one module per tool, named after it', async () => {
+    const ghost = await startMockGhost();
+    const srv = createHttpServer(loadConfig(baseEnv(ghost.port, { ENABLE_DELETE: 'true', ENABLE_MEMBERS: 'true' })));
+    const p = await listen(srv);
+    const registered = (await (await rpc(p, `/mcp/${MCP_SECRET}`, 'tools/list', {})).json()).result.tools.map((t) => t.name).sort();
+    const dir = new URL('../dist/tools/', import.meta.url);
+    const files = readdirSync(dir)
+      .filter((f) => f.endsWith('.js') && !['index.js', 'context.js'].includes(f))
+      .map((f) => f.replace(/\.js$/, '').replaceAll('-', '_'))
+      .sort();
+    assert.deepEqual(registered, files);
+    assert.equal(new Set(registered).size, registered.length);
+    srv.close(); ghost.server.close();
   });
 });
 

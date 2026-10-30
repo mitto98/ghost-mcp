@@ -4,7 +4,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import type { Config } from './config.js';
 import { GhostClient } from './ghost.js';
-import { registerTools } from './tools.js';
+import { registerTools } from './tools/index.js';
 
 const MAX_BODY_BYTES = 1024 * 1024;
 
