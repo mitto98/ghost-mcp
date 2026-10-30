@@ -318,7 +318,7 @@ describe('tools folder layout', () => {
     const registered = (await (await rpc(p, `/mcp/${MCP_SECRET}`, 'tools/list', {})).json()).result.tools.map((t) => t.name).sort();
     const dir = new URL('../dist/tools/', import.meta.url);
     const files = readdirSync(dir)
-      .filter((f) => f.endsWith('.js') && !['index.js', 'context.js'].includes(f))
+      .filter((f) => f.endsWith('.js') && !['index.js', 'context.js', 'modules.generated.js'].includes(f))
       .map((f) => f.replace(/\.js$/, '').replaceAll('-', '_'))
       .sort();
     assert.deepEqual(registered, files);

@@ -122,8 +122,8 @@ npm test        # builds, then runs the end-to-end suite against a mock Ghost Ad
 
 Each tool lives in its own file in `src/tools/`, named after the tool (`list_ghost_tags` is `list-ghost-tags.ts`).
 A file default-exports a `ToolModule`: a function that registers the tool, or returns early when the
-configuration forbids it (`READ_ONLY`, `ENABLE_DELETE`, `ENABLE_MEMBERS`). Add the file, then add it to the list in
-`src/tools/index.ts`. Shared code is in `src/tools/shared/`; posts and pages share builders there, with thin
+configuration forbids it (`READ_ONLY`, `ENABLE_DELETE`, `ENABLE_MEMBERS`). That's all: `npm run build` generates the
+list of modules from the folder (`scripts/generate-tools.mjs`, output `src/tools/modules.generated.ts`, not committed). Shared code is in `src/tools/shared/`; posts and pages share builders there, with thin
 per-tool files such as `list-ghost-posts.ts`. A test fails if a tool and its file name drift apart.
 
 The test suite verifies the JWT the way Ghost does, and drives the server with the official MCP client.
